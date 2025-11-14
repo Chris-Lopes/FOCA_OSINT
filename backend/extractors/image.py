@@ -1,30 +1,29 @@
 import exifread
 from PIL import Image, ImageChops, ImageEnhance
+import pillow_heif  # HEIC/HEIF support
 import hashlib
 import subprocess
-import json
 import os
 
+# Enable HEIF/HEIC support inside PIL
+pillow_heif.register_heif_opener()
+
+
 def calculate_hashes(path):
-    hashes = {"md5": "", "sha1": "", "sha256": "", "sha512": ""}
     with open(path, "rb") as f:
         data = f.read()
-        hashes["md5"] = hashlib.md5(data).hexdigest()
-        hashes["sha1"] = hashlib.sha1(data).hexdigest()
-        hashes["sha256"] = hashlib.sha256(data).hexdigest()
-        hashes["sha512"] = hashlib.sha512(data).hexdigest()
-    return hashes
+    return {
+        "md5": hashlib.md5(data).hexdigest(),
+        "sha1": hashlib.sha1(data).hexdigest(),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "sha512": hashlib.sha512(data).hexdigest(),
+    }
 
 
 def extract_png_text(path):
     try:
         output = subprocess.check_output(["identify", "-verbose", path]).decode()
-        # Extract tEXt chunks
-        chunks = []
-        for line in output.split("\n"):
-            if "tEXt" in line or "iTXt" in line or "zTXt" in line:
-                chunks.append(line.strip())
-        return chunks
+        return [line.strip() for line in output.split("\n") if any(c in line for c in ["tEXt", "iTXt", "zTXt"])]
     except:
         return []
 
@@ -32,23 +31,9 @@ def extract_png_text(path):
 def extract_icc_profile(path):
     try:
         img = Image.open(path)
-        icc = img.info.get("icc_profile")
-        return "Present" if icc else "None"
+        return "Present" if img.info.get("icc_profile") else "None"
     except:
-        return "Error loading ICC"
-
-
-def guess_origin(metadata, hashes):
-    # Basic heuristics
-    if "Image Model" in metadata:
-        return "Taken from a camera or mobile phone"
-    if len(metadata) == 0:
-        if hashes["md5"].startswith("00000"):
-            return "Likely from a compressed web upload"
-        return "Possibly a screenshot / social media download"
-    if "GPS GPSLatitude" in metadata:
-        return "Original image with GPS data (camera)"
-    return "Unknown (no strong indicators)"
+        return "Error reading ICC"
 
 
 def gps_to_map(tags):
@@ -58,84 +43,97 @@ def gps_to_map(tags):
         lat_ref = tags["GPS GPSLatitudeRef"]
         lon_ref = tags["GPS GPSLongitudeRef"]
 
-        def convert(value):
-            d, m, s = [float(x.num) / float(x.den) for x in value.values]
-            return d + (m / 60) + (s / 3600)
+        def convert(values):
+            d, m, s = [float(x.num) / float(x.den) for x in values]
+            return d + m/60 + s/3600
 
-        lat_dec = convert(lat)
-        lon_dec = convert(lon)
+        lat_dec = convert(lat.values)
+        lon_dec = convert(lon.values)
 
         if lat_ref.values != "N":
             lat_dec = -lat_dec
         if lon_ref.values != "E":
             lon_dec = -lon_dec
 
-        google_maps = f"https://www.google.com/maps?q={lat_dec},{lon_dec}"
-        return google_maps
+        return f"https://www.google.com/maps?q={lat_dec},{lon_dec}"
     except:
         return None
 
 
+def origin_guess(exif: dict):
+    if "Image Model" in exif:
+        model = exif["Image Model"].lower()
+        if "iphone" in model:
+            return "Captured using an iPhone"
+        if "samsung" in model:
+            return "Captured using a Samsung device"
+        return "Captured using a camera"
+
+    if len(exif) == 0:
+        return "Likely screenshot or metadata-stripped social media upload"
+
+    return "Unknown"
+
+
 def ela_analysis(path):
     try:
-        original = Image.open(path)
-        original = original.convert("RGB")
+        img = Image.open(path).convert("RGB")
 
-        # Save at a lower quality to detect differences
-        temp = path + "_resaved.jpg"
-        original.save(temp, "JPEG", quality=90)
+        # Save a temporary JPEG
+        temp_jpeg = path + "_temp.jpg"
+        img.save(temp_jpeg, "JPEG", quality=90)
 
-        resaved = Image.open(temp)
-        diff = ImageChops.difference(original, resaved)
+        resaved = Image.open(temp_jpeg)
+        diff = ImageChops.difference(img, resaved)
 
-        enhancer = ImageEnhance.Brightness(diff)
-        ela_image = enhancer.enhance(30)
+        ela_img = ImageEnhance.Brightness(diff).enhance(30)
 
-        ela_output = path + "_ela.png"
-        ela_image.save(ela_output)
+        out_path = path + "_ELA.png"
+        ela_img.save(out_path)
 
-        os.remove(temp)
+        os.remove(temp_jpeg)
 
-        return ela_output
+        return out_path
     except:
         return None
 
 
 def extract_image_metadata(path):
-    output = {}
+    result = {}
 
-    # 1. EXIF METADATA
+    # Hashes
+    result["hashes"] = calculate_hashes(path)
+
+    # EXIF (works with HEIC now)
     try:
-        tags = exifread.process_file(open(path, "rb"))
-        output["exif"] = {k: str(v) for k, v in tags.items()}
+        with open(path, "rb") as f:
+            tags = exifread.process_file(f)
+        exif = {k: str(v) for k, v in tags.items()}
     except:
-        output["exif"] = {}
+        exif = {}
 
-    # 2. HASHES
-    output["hashes"] = calculate_hashes(path)
+    result["exif"] = exif
 
-    # 3. PNG metadata (tEXt blocks)
-    output["png_text"] = extract_png_text(path)
+    # PNG tEXt metadata
+    result["png_text"] = extract_png_text(path)
 
-    # 4. ICC Color Profile
-    output["icc_profile"] = extract_icc_profile(path)
+    # ICC Profile
+    result["icc_profile"] = extract_icc_profile(path)
 
-    # 5. GPS → Google Maps
-    gps_link = gps_to_map(tags if "exif" in output else {})
-    output["gps_map"] = gps_link
+    # GPS Map
+    result["gps_map"] = gps_to_map(tags if exif else {})
 
-    # 6. OSINT Origin Guess
-    output["osint_guess"] = guess_origin(output["exif"], output["hashes"])
+    # OSINT origin
+    result["osint_guess"] = origin_guess(exif)
 
-    # 7. Reverse Image Search Links
-    filename = os.path.basename(path)
-    output["reverse_search"] = {
-        "google": f"https://www.google.com/searchbyimage?image_url=file://{filename}",
-        "tineye": f"https://tineye.com/search?url=file://{filename}"
+    # Reverse Image Search Links
+    result["reverse_search"] = {
+        "google": "https://lens.google.com/",
+        "tineye": "https://tineye.com/",
+        "yandex": "https://yandex.com/images/"
     }
 
-    # 8. Error Level Analysis (ELA)
-    ela_file = ela_analysis(path)
-    output["ela_image"] = ela_file  # Can display in frontend
+    # ELA output
+    result["ela_image"] = ela_analysis(path)
 
-    return output
+    return result
