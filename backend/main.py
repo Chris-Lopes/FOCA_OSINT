@@ -35,10 +35,6 @@ async def extract_metadata(file: UploadFile):
 
     data = {"file": file.filename, "type": ext}
 
-    # ---------------------------
-    # ROUTING BASED ON EXTENSION
-    # ---------------------------
-
     # PDF
     if ext == "pdf":
         data["metadata"] = extract_pdf_metadata(tmp_path)

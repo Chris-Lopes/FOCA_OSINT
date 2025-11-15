@@ -187,12 +187,12 @@ export default function Home() {
               <div>
                 <button
                   onClick={copyJSON}
-                  className="mb-4 flex items-center gap-2 bg-gray-700 px-4 py-2 rounded-lg hover:bg-gray-600 text-sm"
+                  className="mb-4 flex items-center gap-2 bg-gray-700 px-3 py-2 md:px-4 md:py-2 rounded-lg hover:bg-gray-600 text-xs md:text-sm w-full md:w-auto justify-center"
                 >
                   <FiCopy /> Copy JSON
                 </button>
 
-                <pre className="bg-gray-900 p-4 rounded-xl text-green-400 text-xs md:text-sm overflow-x-auto whitespace-pre-wrap break-all">
+                <pre className="bg-gray-900 p-3 md:p-4 rounded-xl text-green-400 text-xs md:text-sm overflow-x-auto whitespace-pre-wrap break-all max-w-full">
                   {JSON.stringify(result.metadata, null, 2)}
                 </pre>
               </div>
