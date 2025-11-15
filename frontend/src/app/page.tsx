@@ -29,7 +29,7 @@ export default function Home() {
     form.append("file", file);
 
     try {
-      const res = await axios.post<MetadataResponse>("http://localhost:8000/extract", form);
+      const res = await axios.post<MetadataResponse>("https://8fef0bdee70b.ngrok-free.app/extract", form);
       setResult(res.data);
     } catch {
       setError("Backend error. Check FastAPI.");
